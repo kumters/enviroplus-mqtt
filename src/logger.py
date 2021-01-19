@@ -34,7 +34,14 @@ class EnvLogger:
             self.pm_thread = threading.Thread(target=self.__read_pms_continuously)
             self.pm_thread.daemon = True
             self.pm_thread.start()
-    
+
+    def temperature_compensation(self, temp_sensor):
+        with open('/sys/class/thermal/thermal_zone0/temp', 'r') as f:
+            data = f.readlines()
+        # temp_cpu is int, we have to div by 1000
+        temp_cpu = int(data[0].rstrip())
+        temp_corrected = temp_sensor-(1*((temp_cpu/1000)-temp_sensor)/14.5)-15  # calculated corretion
+        return temp_corrected
 
     def __on_connect(self, client, userdata, flags, rc):
         errors = {
@@ -48,13 +55,12 @@ class EnvLogger:
         if rc > 0:
             self.connection_error = errors.get(rc, "unknown error")
 
-
     def __read_pms_continuously(self):
+
         """Continuously reads from the PMS5003 sensor and stores the most recent values
         in `self.latest_pms_readings` as they become available.
-
         If the sensor is not polled continously then readings are buffered on the PMS5003,
-        and over time a significant delay is introduced between changes in PM levels and 
+        and over time a significant delay is introduced between changes in PM levels and
         the corresponding change in reported levels."""
 
         pms = PMS5003()
@@ -71,13 +77,12 @@ class EnvLogger:
                 traceback.print_exc()
                 pms.reset()
 
-
     def take_readings(self):
         gas_data = gas.read_all()
         readings = {
             "proximity": ltr559.get_proximity(),
             "lux": ltr559.get_lux(),
-            "temperature": self.bme280.get_temperature(),
+            "temperature": self.temperature_compensation(float(self.bme280.get_temperature())),
             "pressure": self.bme280.get_pressure(),
             "humidity": self.bme280.get_humidity(),
             "gas/oxidising": gas_data.oxidising,
@@ -86,14 +91,12 @@ class EnvLogger:
         }
 
         readings.update(self.latest_pms_readings)
-        
-        return readings
 
+        return readings
 
     def publish(self, topic, value):
         topic = self.prefix.strip("/") + "/" + topic
         self.client.publish(topic, str(value))
-
 
     def update(self, publish_readings=True):
         self.samples.append(self.take_readings())
@@ -104,7 +107,6 @@ class EnvLogger:
                 value_avg = value_sum / len(self.samples)
                 self.publish(topic, value_avg)
 
-
     def destroy(self):
         self.client.disconnect()
-        self.client.loop_stop()
+        self.client.loop_stop() 
